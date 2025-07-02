@@ -12,12 +12,23 @@ import numpy as np
 import matplotlib.pyplot as plt
 import io
 import base64
+from flask import Flask, request, jsonify
+from flask_socketio import SocketIO, emit
+from flask_cors import CORS
+import time
+import threading  
 
 app = Flask(__name__)
+app.config['SECRET_KEY'] = 'secret!'
+CORS(app, origins=["http://localhost:5173"])
+socketio = SocketIO(app, cors_allowed_origins="http://localhost:5173", async_mode='threading')
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in {'mp4', 'avi', 'mov'}
 
 # ========== CONFIG ==========
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-max_frames = 30
+# Processing entire video without frame limit
 
 # Path to your models
 effnet_ckpt = "best_model.pth"   # Update to your actual model path
@@ -71,7 +82,7 @@ def extract_video_features(video_path):
     frame_count = 0
     faces_detected = []
 
-    while cap.isOpened() and frame_count < max_frames:
+    while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
@@ -98,13 +109,6 @@ def extract_video_features(video_path):
 
     if not features:
         return None
-    if len(features) < max_frames:
-        pad_len = max_frames - len(features)
-        features += [torch.zeros_like(features[0])] * pad_len
-        faces_detected += [0] * pad_len
-    else:
-        features = features[:max_frames]
-        faces_detected = faces_detected[:max_frames]
 
     return torch.stack(features).unsqueeze(0).to(device), faces_detected  # shape: [1, seq, 1280]
 
@@ -113,48 +117,111 @@ def extract_video_features(video_path):
 def predict():
     # Get the video file from the request
     file = request.files.get('video')
+    session_id = request.form.get('session_id')
     
-    if not file:
-        return jsonify({'error': 'No video file provided'}), 400
+    if not file or not allowed_file(file.filename) or not session_id:
+        return jsonify({'error': 'Invalid request'}), 400
 
     video_path = f"./temp_video.mp4"
     file.save(video_path)  # Save the video file to a temporary location
 
-    # Extract features from the video
-    video_features, faces_detected = extract_video_features(video_path)
+    # Use threading instead of socketio background task for better real-time performance
+    thread = threading.Thread(target=process_video, args=(video_path, session_id))
+    thread.daemon = True
+    thread.start()
 
-    if video_features is not None:
-        with torch.no_grad():
-            output = lstm_model(video_features)
-            probs = F.softmax(output, dim=1) 
-            pred = torch.argmax(probs, dim=1).item()
-            violent_prob = probs[0][1].item() * 100
-            non_violent_prob = probs[0][0].item() * 100
+    return jsonify({'message': 'Processing started'}), 200
 
+
+def process_video(video_path, session_id):
+    print(f"Processing video: {video_path} for session: {session_id}")
+    cap = cv2.VideoCapture(video_path)
+    features = []
+    frame_count = 0
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        faces = face_detector.get(frame)
+        face_data = []
+        
+        # Process face detection and feature extraction
+        if faces:
+            bbox = faces[0].bbox.astype(int)
+            x1, y1, x2, y2 = bbox
+            face_data = [int(x1), int(y1), int(x2), int(y2)]
+            face_crop = frame[y1:y2, x1:x2]
+            if face_crop.size == 0:
+                frame_count += 1
+                continue
+            face_pil = Image.fromarray(cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB))
+            face_tensor = transform(face_pil).unsqueeze(0).to(device)
+
+            with torch.no_grad():
+                features_list.clear()
+                _ = effnet(face_tensor)
+                feat = features_list[0].squeeze()
+            features.append(feat.cpu())
+
+        frame_count += 1
+
+        # Encode frame for transmission
+        _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])  # Reduce quality for faster transmission
+        img_bytes = jpeg.tobytes()
+        img_b64 = base64.b64encode(img_bytes).decode('utf-8')
+
+        print(f"Sending frame {frame_count}/{total_frames} to session {session_id}")
+        
+        # Emit frame data immediately
+        with app.app_context():
+            socketio.emit('frame', {
+                'frame_idx': frame_count,
+                'total_frames': total_frames,
+                'face': face_data,
+                'frame_img': img_b64
+            }, to=session_id)
+        
+        # Small delay to prevent overwhelming the client and ensure real-time delivery
+        time.sleep(0.05)
+
+    cap.release()
+
+    if not features:
+        with app.app_context():
+            socketio.emit('result', {'error': 'No face detected'}, to=session_id)
+        return
+
+    # LSTM prediction - handle variable sequence lengths
+    if len(features) == 0:
+        with app.app_context():
+            socketio.emit('result', {'error': 'No face detected'}, to=session_id)
+        return
+    
+    video_features = torch.stack(features).unsqueeze(0).to(device)  # shape: [1, seq_len, 1280]
+    with torch.no_grad():
+        output = lstm_model(video_features)
+        pred = torch.argmax(output, dim=1).item()
         label = "VIOLENT" if pred == 1 else "NON-VIOLENT"
 
-        fig, ax = plt.subplots()
-        ax.bar(range(len(faces_detected)), faces_detected)
-        ax.set_xlabel("Frame")
-        ax.set_ylabel("Face Detected (1=Yes, 0=No)")
-        ax.set_title("Face Detection Per Frame")
-        plt.tight_layout()
+    # Send final result
+    print(label)
+    with app.app_context():
+        socketio.emit('result', {'prediction': label}, to=session_id)
 
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png')
-        plt.close(fig)
-        buf.seek(0)
-        image_base64 = base64.b64encode(buf.read()).decode('utf-8')
 
-        return jsonify({
-            'prediction': label,
-            'violent_probability': f"{violent_prob:.2f}%",
-            'non_violent_probability': f"{non_violent_prob:.2f}%",
-            'faces_detected_per_frame': faces_detected,
-            'visualization': image_base64
-        })
-    else:
-        return jsonify({'error': 'No face detected or feature extraction failed'}), 500
+@socketio.on('connect')
+def handle_connect():
+    print(f'Client connected: {request.sid}')
+    emit('connected', {'session_id': request.sid})
+
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    print(f'Client disconnected: {request.sid}')
+
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    socketio.run(app, debug=True, host='0.0.0.0', port=5000)
