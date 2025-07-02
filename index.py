@@ -136,19 +136,41 @@ def predict():
 def process_video(video_path, session_id):
     print(f"Processing video: {video_path} for session: {session_id}")
     cap = cv2.VideoCapture(video_path)
+    
+    # Optimize video capture for speed
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Reduce buffer size
+    
     features = []
     frame_count = 0
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    
+    # Skip frame processing for speed optimization
+    process_every_nth_frame = 2  # Process every 2nd frame for speed
+    frame_skip_counter = 0
 
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
 
+        frame_count += 1
+        frame_skip_counter += 1
+        
+        # Resize frame for faster processing while maintaining aspect ratio
+        height, width = frame.shape[:2]
+        if width > 640:  # Resize large frames for speed
+            scale = 640 / width
+            new_width = 640
+            new_height = int(height * scale)
+            frame = cv2.resize(frame, (new_width, new_height))
+
         faces = face_detector.get(frame)
         face_data = []
         
         # Process face detection and feature extraction for ALL faces
+        # Only extract features every nth frame for speed
+        extract_features = frame_skip_counter % process_every_nth_frame == 0
+        
         if faces:
             # Draw bounding boxes for all detected faces
             for i, face in enumerate(faces):
@@ -163,25 +185,24 @@ def process_video(video_path, session_id):
                 if i == 0:
                     face_data = [int(x1), int(y1), int(x2), int(y2)]
             
-            # Extract features from the first/primary face for ML processing
-            primary_face = faces[0]
-            bbox = primary_face.bbox.astype(int)
-            x1, y1, x2, y2 = bbox
-            face_crop = frame[y1:y2, x1:x2]
-            if face_crop.size > 0:
-                face_pil = Image.fromarray(cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB))
-                face_tensor = transform(face_pil).unsqueeze(0).to(device)
+            # Extract features from the first/primary face for ML processing (less frequently)
+            if extract_features:
+                primary_face = faces[0]
+                bbox = primary_face.bbox.astype(int)
+                x1, y1, x2, y2 = bbox
+                face_crop = frame[y1:y2, x1:x2]
+                if face_crop.size > 0:
+                    face_pil = Image.fromarray(cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB))
+                    face_tensor = transform(face_pil).unsqueeze(0).to(device)
 
-                with torch.no_grad():
-                    features_list.clear()
-                    _ = effnet(face_tensor)
-                    feat = features_list[0].squeeze()
-                features.append(feat.cpu())
+                    with torch.no_grad():
+                        features_list.clear()
+                        _ = effnet(face_tensor)
+                        feat = features_list[0].squeeze()
+                    features.append(feat.cpu())
 
-        frame_count += 1
-
-        # Encode frame for transmission
-        _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])  # Reduce quality for faster transmission
+        # Encode frame for transmission with lower quality for speed
+        _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 50])  # Reduced quality for speed
         img_bytes = jpeg.tobytes()
         img_b64 = base64.b64encode(img_bytes).decode('utf-8')
 
@@ -196,8 +217,8 @@ def process_video(video_path, session_id):
                 'frame_img': img_b64
             }, to=session_id)
         
-        # Small delay to prevent overwhelming the client and ensure real-time delivery
-        time.sleep(0.05)
+        # Minimal delay for 30fps target - adjust based on processing speed
+        time.sleep(0.01)  # Very small delay to prevent overwhelming
 
     cap.release()
 
