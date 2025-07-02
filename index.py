@@ -148,23 +148,35 @@ def process_video(video_path, session_id):
         faces = face_detector.get(frame)
         face_data = []
         
-        # Process face detection and feature extraction
+        # Process face detection and feature extraction for ALL faces
         if faces:
-            bbox = faces[0].bbox.astype(int)
+            # Draw bounding boxes for all detected faces
+            for i, face in enumerate(faces):
+                bbox = face.bbox.astype(int)
+                x1, y1, x2, y2 = bbox
+                
+                # Draw bounding box on the frame
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)  # Green rectangle
+                cv2.putText(frame, f'Face {i+1}', (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                
+                # Store face data for the first face (for backward compatibility with frontend)
+                if i == 0:
+                    face_data = [int(x1), int(y1), int(x2), int(y2)]
+            
+            # Extract features from the first/primary face for ML processing
+            primary_face = faces[0]
+            bbox = primary_face.bbox.astype(int)
             x1, y1, x2, y2 = bbox
-            face_data = [int(x1), int(y1), int(x2), int(y2)]
             face_crop = frame[y1:y2, x1:x2]
-            if face_crop.size == 0:
-                frame_count += 1
-                continue
-            face_pil = Image.fromarray(cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB))
-            face_tensor = transform(face_pil).unsqueeze(0).to(device)
+            if face_crop.size > 0:
+                face_pil = Image.fromarray(cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB))
+                face_tensor = transform(face_pil).unsqueeze(0).to(device)
 
-            with torch.no_grad():
-                features_list.clear()
-                _ = effnet(face_tensor)
-                feat = features_list[0].squeeze()
-            features.append(feat.cpu())
+                with torch.no_grad():
+                    features_list.clear()
+                    _ = effnet(face_tensor)
+                    feat = features_list[0].squeeze()
+                features.append(feat.cpu())
 
         frame_count += 1
 
