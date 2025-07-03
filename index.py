@@ -261,7 +261,7 @@ def process_video(video_path, session_id):
         socketio.emit('result', {
             'prediction': label,
             'violent': violent_prob,
-            'non-violent': non_violent_prob
+            'nonViolent': non_violent_prob
         }, to=session_id)
 
 
