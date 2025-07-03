@@ -48,7 +48,7 @@ const uploadVideo = async () => {
   totalFrames.value = 0
   result.value = null
 
-  await fetch('http://localhost:5000/predict', {
+  await fetch('/api/predict', {
     method: 'POST',
     body: formData,
   })

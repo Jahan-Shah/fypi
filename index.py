@@ -113,8 +113,12 @@ def extract_video_features(video_path):
 
     return torch.stack(features).unsqueeze(0).to(device), faces_detected  # shape: [1, seq, 1280]
 
+@app.route('/api/hello', methods=['GET'])
+def hello():
+    return '<h1>Hello</h1>'
+
 # ========== FLASK ROUTE ==========
-@app.route('/predict', methods=['POST'])
+@app.route('/api/predict', methods=['POST'])
 def predict():
     # Get the video file from the request
     file = request.files.get('video')
@@ -196,19 +200,19 @@ def process_video(video_path, session_id):
         faces = face_detector.get(frame)
         face_data = []
 
-        # if faces:
-        #     # Draw bounding boxes for all detected faces
-        #     for i, face in enumerate(faces):
-        #         bbox = face.bbox.astype(int)
-        #         x1, y1, x2, y2 = bbox
+        if faces:
+            # Draw bounding boxes for all detected faces
+            for i, face in enumerate(faces):
+                bbox = face.bbox.astype(int)
+                x1, y1, x2, y2 = bbox
                 
-        #         # Draw bounding box on the frame
-        #         cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)  # Green rectangle
-        #         cv2.putText(frame, f'Face {i+1}', (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                # Draw bounding box on the frame
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)  # Green rectangle
+                cv2.putText(frame, f'Face {i+1}', (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
                 
-        #         # Store face data for the first face (for backward compatibility with frontend)
-        #         if i == 0:
-        #             face_data = [int(x1), int(y1), int(x2), int(y2)]
+                # Store face data for the first face (for backward compatibility with frontend)
+                if i == 0:
+                    face_data = [int(x1), int(y1), int(x2), int(y2)]
         
         # Place frame and faces in the queue for feature extraction
         frame_queue.put((frame, faces))
