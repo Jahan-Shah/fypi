@@ -16,12 +16,13 @@ from flask import Flask, request, jsonify
 from flask_socketio import SocketIO, emit
 from flask_cors import CORS
 import time
-import threading  
+import threading
+from queue import Queue
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
 CORS(app, origins=["http://localhost:5173"])
-socketio = SocketIO(app, cors_allowed_origins="http://localhost:5173", async_mode='threading')
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in {'mp4', 'avi', 'mov'}
@@ -32,10 +33,10 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 # Path to your models
 effnet_ckpt = "best_model.pth"   # Update to your actual model path
-lstm_ckpt = "retrained_lstm_model.pt"  # Update to your actual LSTM model path
+lstm_ckpt = "best_lstm_model_01.pt"  # Update to your actual LSTM model path
 
 # ========== FACE DETECTOR ==========
-face_detector = FaceAnalysis(name="buffalo_l", providers=['CPUExecutionProvider'])
+face_detector = FaceAnalysis(name="buffalo_l", providers=['CUDAExecutionProvider'])
 face_detector.prepare(ctx_id=0)
 
 # ========== TRANSFORM ==========
@@ -133,6 +134,31 @@ def predict():
     return jsonify({'message': 'Processing started'}), 200
 
 
+def feature_extraction_worker(frame_queue, features, device):
+    while True:
+        frame, faces = frame_queue.get()
+        if frame is None:  # Sentinel value to stop the thread
+            break
+        
+        # Process only if faces are detected
+        if faces:
+            primary_face = faces[0]
+            bbox = primary_face.bbox.astype(int)
+            x1, y1, x2, y2 = bbox
+            face_crop = frame[y1:y2, x1:x2]
+            
+            if face_crop.size > 0:
+                face_pil = Image.fromarray(cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB))
+                face_tensor = transform(face_pil).unsqueeze(0).to(device)
+
+                with torch.no_grad():
+                    features_list.clear()
+                    _ = effnet(face_tensor)
+                    feat = features_list[0].squeeze()
+                features.append(feat.cpu())
+        
+        frame_queue.task_done()
+
 def process_video(video_path, session_id):
     print(f"Processing video: {video_path} for session: {session_id}")
     cap = cv2.VideoCapture(video_path)
@@ -144,9 +170,13 @@ def process_video(video_path, session_id):
     frame_count = 0
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
-    # Skip frame processing for speed optimization
-    process_every_nth_frame = 2  # Process every 2nd frame for speed
-    frame_skip_counter = 0
+    # Create a queue for storing frames and faces for the worker to process
+    frame_queue = Queue(maxsize=10)  # Buffer size of 10 frames
+
+    # Start feature extraction thread
+    feature_thread = threading.Thread(target=feature_extraction_worker, args=(frame_queue, features, device))
+    feature_thread.daemon = True
+    feature_thread.start()
 
     while cap.isOpened():
         ret, frame = cap.read()
@@ -154,8 +184,7 @@ def process_video(video_path, session_id):
             break
 
         frame_count += 1
-        frame_skip_counter += 1
-        
+
         # Resize frame for faster processing while maintaining aspect ratio
         height, width = frame.shape[:2]
         if width > 640:  # Resize large frames for speed
@@ -166,40 +195,23 @@ def process_video(video_path, session_id):
 
         faces = face_detector.get(frame)
         face_data = []
-        
-        # Process face detection and feature extraction for ALL faces
-        # Only extract features every nth frame for speed
-        extract_features = frame_skip_counter % process_every_nth_frame == 0
-        
-        if faces:
-            # Draw bounding boxes for all detected faces
-            for i, face in enumerate(faces):
-                bbox = face.bbox.astype(int)
-                x1, y1, x2, y2 = bbox
-                
-                # Draw bounding box on the frame
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)  # Green rectangle
-                cv2.putText(frame, f'Face {i+1}', (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-                
-                # Store face data for the first face (for backward compatibility with frontend)
-                if i == 0:
-                    face_data = [int(x1), int(y1), int(x2), int(y2)]
-            
-            # Extract features from the first/primary face for ML processing (less frequently)
-            if extract_features:
-                primary_face = faces[0]
-                bbox = primary_face.bbox.astype(int)
-                x1, y1, x2, y2 = bbox
-                face_crop = frame[y1:y2, x1:x2]
-                if face_crop.size > 0:
-                    face_pil = Image.fromarray(cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB))
-                    face_tensor = transform(face_pil).unsqueeze(0).to(device)
 
-                    with torch.no_grad():
-                        features_list.clear()
-                        _ = effnet(face_tensor)
-                        feat = features_list[0].squeeze()
-                    features.append(feat.cpu())
+        # if faces:
+        #     # Draw bounding boxes for all detected faces
+        #     for i, face in enumerate(faces):
+        #         bbox = face.bbox.astype(int)
+        #         x1, y1, x2, y2 = bbox
+                
+        #         # Draw bounding box on the frame
+        #         cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)  # Green rectangle
+        #         cv2.putText(frame, f'Face {i+1}', (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                
+        #         # Store face data for the first face (for backward compatibility with frontend)
+        #         if i == 0:
+        #             face_data = [int(x1), int(y1), int(x2), int(y2)]
+        
+        # Place frame and faces in the queue for feature extraction
+        frame_queue.put((frame, faces))
 
         # Encode frame for transmission with lower quality for speed
         _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 50])  # Reduced quality for speed
@@ -216,10 +228,11 @@ def process_video(video_path, session_id):
                 'face': face_data,
                 'frame_img': img_b64
             }, to=session_id)
-        
-        # Minimal delay for 30fps target - adjust based on processing speed
-        time.sleep(0.01)  # Very small delay to prevent overwhelming
 
+
+    # Wait for the worker to finish processing remaining frames
+    frame_queue.join()
+    
     cap.release()
 
     if not features:
@@ -228,21 +241,24 @@ def process_video(video_path, session_id):
         return
 
     # LSTM prediction - handle variable sequence lengths
-    if len(features) == 0:
-        with app.app_context():
-            socketio.emit('result', {'error': 'No face detected'}, to=session_id)
-        return
-    
     video_features = torch.stack(features).unsqueeze(0).to(device)  # shape: [1, seq_len, 1280]
     with torch.no_grad():
         output = lstm_model(video_features)
-        pred = torch.argmax(output, dim=1).item()
+        probs = F.softmax(output, dim=1)
+        pred = torch.argmax(probs, dim=1).item()
         label = "VIOLENT" if pred == 1 else "NON-VIOLENT"
+
+        violent_prob = probs[0][1].item() * 100
+        non_violent_prob = probs[0][0].item() * 100
 
     # Send final result
     print(label)
     with app.app_context():
-        socketio.emit('result', {'prediction': label}, to=session_id)
+        socketio.emit('result', {
+            'prediction': label,
+            'violent': violent_prob,
+            'non-violent': non_violent_prob
+        }, to=session_id)
 
 
 @socketio.on('connect')
