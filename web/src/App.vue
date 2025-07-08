@@ -1,7 +1,7 @@
 <script setup>
 import { ref } from 'vue'
-import { 
-  Shield, Menu, ArrowRight, Eye, Brain, Zap, Upload, FileVideo, 
+import {
+  Shield, Menu, ArrowRight, Eye, Brain, Zap, Upload, FileVideo,
   X, Play, Loader2,
 } from 'lucide-vue-next'
 import { socket } from './socket'
@@ -11,6 +11,7 @@ const currentView = ref('home')
 const mobileMenuOpen = ref(false)
 const selectedFile = ref(null)
 const isDragging = ref(false)
+const isUploading = ref(false)
 const isAnalyzing = ref(false)
 const analysisResult = ref(null)
 const currentFrame = ref(null)
@@ -21,31 +22,31 @@ const processing = ref(false)
 const result = ref(null)
 const sessionId = ref(null)
 
-  socket.on('connect', () => {
-    sessionId.value = socket.id
-    console.log('Socket connected:', sessionId.value)
-  })
+socket.on('connect', () => {
+  sessionId.value = socket.id
+  console.log('Socket connected:', sessionId.value)
+})
 
-  socket.on('connected', (data) => {
-    console.log('Server confirmed connection:', data.session_id)
-  })
+socket.on('connected', (data) => {
+  console.log('Server confirmed connection:', data.session_id)
+})
 
-  socket.on('frame', (data) => {
-    console.log('Received frame:', data)
-    isAnalyzing.value = true
-    frameIdx.value = data.frame_idx
-    totalFrames.value = data.total_frames
-    faceBox.value = data.face
-    currentFrame.value = `data:image/jpeg;base64,${data.frame_img}`
-    processing.value = true
-  })
-  
-  socket.on('result', (data) => {
-    console.log('Received result:', data)
-    isAnalyzing.value = false
-    processing.value = false
-    result.value = data
-  })
+socket.on('frame', (data) => {
+  console.log('Received frame:', data)
+  isAnalyzing.value = true
+  frameIdx.value = data.frame_idx
+  totalFrames.value = data.total_frames
+  faceBox.value = data.face
+  currentFrame.value = `data:image/jpeg;base64,${data.frame_img}`
+  processing.value = true
+})
+
+socket.on('result', (data) => {
+  console.log('Received result:', data)
+  isAnalyzing.value = false
+  // processing.value = false
+  result.value = data
+})
 
 // File handling
 const handleFileSelect = (event) => {
@@ -78,10 +79,13 @@ const formatFileSize = (bytes) => {
 
 // Analysis functions
 const analyzeVideo = async () => {
+  result.value = null
   if (!selectedFile.value) return
+  isUploading.value = true
   try {
     const formData = new FormData()
     formData.append('video', selectedFile.value)
+    formData.append('session_id', sessionId.value)
     await fetch('/api/predict', {
       method: 'POST',
       body: formData
@@ -89,6 +93,9 @@ const analyzeVideo = async () => {
     
   } catch (error) {
     console.error('Analysis failed:', error)
+  } finally {
+    console.log('hello')
+    isUploading.value = false
   }
 }
 
@@ -116,18 +123,14 @@ const analyzeVideo = async () => {
             <span class="text-xl font-bold">Vision Guard</span>
           </div>
           <div class="hidden md:flex space-x-8">
-            <button 
-              @click="currentView = 'home'" 
+            <button @click="currentView = 'home'"
               :class="currentView === 'home' ? 'text-primary' : 'text-muted-foreground hover:text-foreground'"
-              class="transition-colors"
-            >
+              class="transition-colors">
               Home
             </button>
-            <button 
-              @click="currentView = 'app'" 
+            <button @click="currentView = 'app'"
               :class="currentView === 'app' ? 'text-primary' : 'text-muted-foreground hover:text-foreground'"
-              class="transition-colors"
-            >
+              class="transition-colors">
               Analyze Video
             </button>
           </div>
@@ -139,16 +142,12 @@ const analyzeVideo = async () => {
         </div>
         <!-- Mobile menu -->
         <div v-if="mobileMenuOpen" class="md:hidden py-4 space-y-2">
-          <button 
-            @click="currentView = 'home'; mobileMenuOpen = false" 
-            class="block w-full text-left px-2 py-1 text-muted-foreground hover:text-foreground"
-          >
+          <button @click="currentView = 'home'; mobileMenuOpen = false"
+            class="block w-full text-left px-2 py-1 text-muted-foreground hover:text-foreground">
             Home
           </button>
-          <button 
-            @click="currentView = 'app'; mobileMenuOpen = false" 
-            class="block w-full text-left px-2 py-1 text-muted-foreground hover:text-foreground"
-          >
+          <button @click="currentView = 'app'; mobileMenuOpen = false"
+            class="block w-full text-left px-2 py-1 text-muted-foreground hover:text-foreground">
             Analyze Video
           </button>
         </div>
@@ -166,17 +165,17 @@ const analyzeVideo = async () => {
               <span class="text-primary block">Through Facial Analysis</span>
             </h1>
             <p class="text-xl text-muted-foreground mb-8 max-w-2xl mx-auto">
-              Advanced machine learning technology that analyzes facial expressions and micro-expressions to detect signs of violence and aggression in video content.
+              Advanced machine learning technology that analyzes facial expressions and micro-expressions to detect
+              signs of violence and aggression in video content.
             </p>
             <div class="flex flex-col sm:flex-row gap-4 justify-center">
-              <button 
-                @click="currentView = 'app'"
-                class="inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground hover:bg-primary/90 h-11 px-8"
-              >
+              <button @click="currentView = 'app'"
+                class="inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground hover:bg-primary/90 h-11 px-8">
                 Start Analysis
                 <ArrowRight class="ml-2 h-4 w-4" />
               </button>
-              <button class="inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-input bg-background hover:bg-accent hover:text-accent-foreground h-11 px-8">
+              <button
+                class="inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-input bg-background hover:bg-accent hover:text-accent-foreground h-11 px-8">
                 Learn More
               </button>
             </div>
@@ -190,7 +189,8 @@ const analyzeVideo = async () => {
           <div class="text-center mb-16">
             <h2 class="text-3xl font-bold mb-4">Advanced Detection Capabilities</h2>
             <p class="text-muted-foreground max-w-2xl mx-auto">
-              Our AI system uses state-of-the-art computer vision and machine learning to analyze subtle facial cues and expressions.
+              Our AI system uses state-of-the-art computer vision and machine learning to analyze subtle facial cues and
+              expressions.
             </p>
           </div>
           <div class="grid md:grid-cols-3 gap-8">
@@ -236,7 +236,8 @@ const analyzeVideo = async () => {
           </div>
           <div class="grid md:grid-cols-3 gap-8">
             <div class="text-center">
-              <div class="w-16 h-16 bg-primary rounded-full flex items-center justify-center mx-auto mb-4 text-primary-foreground font-bold text-xl">
+              <div
+                class="w-16 h-16 bg-primary rounded-full flex items-center justify-center mx-auto mb-4 text-primary-foreground font-bold text-xl">
                 1
               </div>
               <h3 class="text-xl font-semibold mb-2">Upload Video</h3>
@@ -245,7 +246,8 @@ const analyzeVideo = async () => {
               </p>
             </div>
             <div class="text-center">
-              <div class="w-16 h-16 bg-primary rounded-full flex items-center justify-center mx-auto mb-4 text-primary-foreground font-bold text-xl">
+              <div
+                class="w-16 h-16 bg-primary rounded-full flex items-center justify-center mx-auto mb-4 text-primary-foreground font-bold text-xl">
                 2
               </div>
               <h3 class="text-xl font-semibold mb-2">AI Analysis</h3>
@@ -254,7 +256,8 @@ const analyzeVideo = async () => {
               </p>
             </div>
             <div class="text-center">
-              <div class="w-16 h-16 bg-primary rounded-full flex items-center justify-center mx-auto mb-4 text-primary-foreground font-bold text-xl">
+              <div
+                class="w-16 h-16 bg-primary rounded-full flex items-center justify-center mx-auto mb-4 text-primary-foreground font-bold text-xl">
                 3
               </div>
               <h3 class="text-xl font-semibold mb-2">Get Results</h3>
@@ -281,21 +284,11 @@ const analyzeVideo = async () => {
         <div class="rounded-lg border bg-card text-card-foreground shadow-sm mb-8">
           <div class="p-6">
             <h3 class="text-lg font-semibold mb-4">Upload Video</h3>
-            <div 
-              @drop="handleDrop"
-              @dragover.prevent
-              @dragenter.prevent
+            <div @drop="handleDrop" @dragover.prevent @dragenter.prevent
               :class="isDragging ? 'border-primary bg-primary/5' : 'border-dashed border-muted-foreground/25'"
               class="border-2 rounded-lg p-8 text-center transition-colors cursor-pointer"
-              @click="$refs.fileInput.click()"
-            >
-              <input 
-                ref="fileInput"
-                type="file" 
-                accept="video/*" 
-                @change="handleFileSelect"
-                class="hidden"
-              >
+              @click="$refs.fileInput.click()">
+              <input ref="fileInput" type="file" accept="video/*" @change="handleFileSelect" class="hidden">
               <Upload class="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
               <p class="text-lg font-medium mb-2">
                 {{ selectedFile ? selectedFile.name : 'Drop your video here or click to browse' }}
@@ -304,7 +297,7 @@ const analyzeVideo = async () => {
                 Supports MP4, AVI, MOV files up to 100MB
               </p>
             </div>
-            
+
             <div v-if="selectedFile" class="mt-4 flex items-center justify-between p-4 bg-muted rounded-lg">
               <div class="flex items-center space-x-3">
                 <FileVideo class="h-5 w-5 text-primary" />
@@ -313,20 +306,18 @@ const analyzeVideo = async () => {
                   <p class="text-sm text-muted-foreground">{{ formatFileSize(selectedFile.size) }}</p>
                 </div>
               </div>
-              <button 
-                @click="removeFile"
-                class="text-muted-foreground hover:text-foreground"
-              >
+              <button @click="removeFile" class="text-muted-foreground hover:text-foreground">
                 <X class="h-5 w-5" />
               </button>
             </div>
 
-            <button 
-              @click="analyzeVideo"
-              :disabled="!selectedFile || isAnalyzing"
-              class="w-full mt-4 inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground hover:bg-primary/90 h-11 px-8"
-            >
-              <span v-if="isAnalyzing" class="flex items-center">
+            <button @click="analyzeVideo" :disabled="!selectedFile || isAnalyzing || isUploading"
+              class="w-full mt-4 inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground hover:bg-primary/90 h-11 px-8">
+              <span v-if="isUploading" class="flex items-center">
+                <Loader2 class="mr-2 h-4 w-4 animate-spin" />
+                Uploading...
+              </span>
+              <span v-else-if="isAnalyzing" class="flex items-center">
                 <Loader2 class="mr-2 h-4 w-4 animate-spin" />
                 Analyzing...
               </span>
@@ -339,20 +330,20 @@ const analyzeVideo = async () => {
         </div>
 
         <!-- Progress Section -->
-        <div v-if="isAnalyzing" class="rounded-lg border bg-card text-card-foreground shadow-sm mb-8">
+        <div v-if="processing" class="rounded-lg border bg-card text-card-foreground shadow-sm mb-8">
           <div class="p-6">
             <h3 class="text-lg font-semibold mb-4">Analysis Progress</h3>
             <div class="space-y-4">
-              <div class="flex items-center justify-between">
-                <span class="text-sm font-medium">Processing... Frame {{frameIdx}} / {{totalFrames}}</span>
-                <img :src="currentFrame" 
-                alt="Current Frame" 
-                class="w-32 h-32 object-cover rounded-lg border border-muted-foreground"
-                v-if="currentFrame" />
+              <div class="flex flex-col items-center justify-between">
+                <span class="text-sm font-medium">Processing... Frame {{ frameIdx }} / {{ totalFrames }}</span>
+                <img :src="currentFrame" alt="Current Frame"
+                  class="w-full object-contain border border-muted-foreground" v-if="currentFrame" />
               </div>
-              <span v-if="result" class="text-sm font-medium">Prediction: {{result.prediction}}</span>
-              <span v-if="result" class="text-sm font-medium">violent%: {{result.violent}}</span>
-              <span v-if="result" class="text-sm font-medium">non-violent%: {{result.nonViolent}}</span>
+              <div v-if="result" class="space-x-4">
+                <span class="text-sm font-medium">Prediction: {{ result.prediction }}</span>
+                <span class="text-sm font-medium">violent%: {{ Number(result.violent).toFixed(2) }}</span>
+                <span class="text-sm font-medium">non-violent%: {{ Number(result.nonViolent).toFixed(2) }}</span>
+              </div>
             </div>
           </div>
         </div>

@@ -32,7 +32,7 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 # Processing entire video without frame limit
 
 # Path to your models
-effnet_ckpt = "best_model.pth"   # Update to your actual model path
+effnet_ckpt = "best_model (1).pth"   # Update to your actual model path
 lstm_ckpt = "best_lstm_model_01.pt"  # Update to your actual LSTM model path
 
 # ========== FACE DETECTOR ==========
@@ -123,7 +123,7 @@ def predict():
     # Get the video file from the request
     file = request.files.get('video')
     session_id = request.form.get('session_id')
-    
+
     if not file or not allowed_file(file.filename) or not session_id:
         return jsonify({'error': 'Invalid request'}), 400
 
@@ -158,8 +158,11 @@ def feature_extraction_worker(frame_queue, features, device):
                 with torch.no_grad():
                     features_list.clear()
                     _ = effnet(face_tensor)
-                    feat = features_list[0].squeeze()
-                features.append(feat.cpu())
+                    if features_list:  # ✅ Safe check
+                        feat = features_list[0].squeeze()
+                        features.append(feat.cpu())
+                    else:
+                        print("Warning: Feature extraction returned empty list.")
         
         frame_queue.task_done()
 

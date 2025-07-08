@@ -8,7 +8,7 @@ import vueDevTools from 'vite-plugin-vue-devtools'
 export default defineConfig({
   plugins: [
     vue(),
-    vueDevTools(),
+    // vueDevTools(),
     tailwindcss(),
   ],
   resolve: {
@@ -29,6 +29,6 @@ export default defineConfig({
          ws: true
       }
     },
-    allowedHosts: ["8f56-103-104-87-47.ngrok-free.app"],
+    allowedHosts: [".ngrok-free.app"],
   }
 })
