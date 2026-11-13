@@ -9,3 +9,4 @@ insightface
 Pillow
 scikit-learn
 numpy
+matplotlib
